@@ -3,36 +3,46 @@ import os
 import base64
 import tempfile
 import pandas as pd
-import docx 
-from docx import Document
-import numpy as np
-import queue
-import soundfile as sf
+import hmac
+
 from dotenv import load_dotenv
 from openai import OpenAI
 from pypdf import PdfReader
-from gtts import gTTS
+from docx import Document
 from duckduckgo_search import DDGS
-from streamlit_webrtc import webrtc_streamer
 
-# -----------------------------------
+# -----------------------------
 # LOAD ENV
-# -----------------------------------
+# -----------------------------
 
 load_dotenv()
 
 API_KEY = os.getenv("OPENAI_API_KEY")
 PASSWORD = os.getenv("APP_PASSWORD")
 
-# -----------------------------------
-# STREAMLIT SETTINGS
-# -----------------------------------
+# -----------------------------
+# STREAMLIT CONFIG
+# -----------------------------
 
-st.set_page_config(page_title="HLAL AI Chatbot", layout="wide")
+st.set_page_config(
+    page_title="HLAL AI",
+    page_icon="🤖",
+    layout="wide"
+)
 
-# -----------------------------------
+# -----------------------------
+# DARK MODE STYLE
+# -----------------------------
+
+st.markdown("""
+<style>
+body { background-color:#0e1117; color:white;}
+</style>
+""", unsafe_allow_html=True)
+
+# -----------------------------
 # SESSION STATES
-# -----------------------------------
+# -----------------------------
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -40,283 +50,329 @@ if "messages" not in st.session_state:
 if "auth" not in st.session_state:
     st.session_state.auth = False
 
-if "page" not in st.session_state:
-    st.session_state.page = "Chat"
-
 if "client" not in st.session_state:
     st.session_state.client = None
+
+if "page" not in st.session_state:
+    st.session_state.page = "Chat"
 
 if "pending_files" not in st.session_state:
     st.session_state.pending_files = []
 
-if "login_success" not in st.session_state:
-    st.session_state.login_success = False
-
-# -----------------------------------
-# LOGIN SYSTEM
-# -----------------------------------
-
-if not st.session_state.auth:
-
-    st.title("HLAL AI Chatbot")
-
-    method = st.radio("Login Method", ["Password", "API Key (Optional)"])
-
-    if method == "Password":
-
-        pw = st.text_input("Enter Password", type="password")
-
-        if st.button("Login"):
-
-            if pw == PASSWORD:
-
-                st.session_state.client = OpenAI(api_key=API_KEY)
-                st.session_state.auth = True
-                st.session_state.login_success = True
-                st.rerun()
-
-            else:
-
-                st.error("Wrong password")
-
-    else:
-
-        key = st.text_input("Enter API Key", type="password")
-
-        if st.button("Login with API Key"):
-
-            if key.startswith("sk-"):
-
-                st.session_state.client = OpenAI(api_key=key)
-                st.session_state.auth = True
-                st.session_state.login_success = True
-                st.rerun()
-
-            else:
-
-                st.error("Invalid API key format")
-
-    st.stop()
-
-client = st.session_state.client
-
-if st.session_state.login_success:
-    st.success("Connected to HLAL AI")
-    st.session_state.login_success = False
-
-# -----------------------------------
-# SIDEBAR
-# -----------------------------------
+# -----------------------------
+# SIDEBAR LOGIN + NAVIGATION
+# -----------------------------
 
 with st.sidebar:
 
-    st.title("HLAL AI")
+    st.title("🤖 HLAL AI")
+
+    if not st.session_state.auth:
+
+        st.subheader("Sign In")
+
+        method = st.radio(
+            "Login Method",
+            ["Password", "API Key (Optional)"]
+        )
+
+        with st.form("login_form"):
+
+            pw = st.text_input(
+                "Enter Password / API Key",
+                type="password"
+            )
+
+            submit = st.form_submit_button("Sign In")
+
+            if submit:
+
+                if method == "Password":
+
+                    if hmac.compare_digest(pw, PASSWORD):
+
+                        st.session_state.client = OpenAI(api_key=API_KEY)
+                        st.session_state.auth = True
+                        st.rerun()
+
+                    else:
+                        st.error("Wrong password")
+
+                else:
+
+                    if pw.startswith("sk-"):
+
+                        st.session_state.client = OpenAI(api_key=pw)
+                        st.session_state.auth = True
+                        st.rerun()
+
+                    else:
+                        st.error("Invalid API key")
+
+        st.stop()
+
+    st.divider()
 
     if st.button("💬 Chat"):
         st.session_state.page = "Chat"
 
-    if st.button("📷 Camera"):
+    if st.button("📷 Camera Vision"):
         st.session_state.page = "Camera"
-
-    if st.button("🎨 Image Generation"):
-        st.session_state.page = "Image"
 
     if st.button("🎤 Voice Chat"):
         st.session_state.page = "Voice"
 
-    if st.button("🔊 Text to Speech"):
-        st.session_state.page = "TTS"
+    if st.button("🎨 Image Generation"):
+        st.session_state.page = "Image"
 
-    if st.button("🌐 Web Search"):
-        st.session_state.page = "Search"
+    if st.button("🔊 Text To Speech"):
+        st.session_state.page = "TTS"
 
     st.divider()
 
-    if st.button("🚪 Sign Out"):
+    if st.button("🧹 Clear Chat"):
+        st.session_state.messages = []
+
+    if st.button("🚪 Logout"):
         st.session_state.auth = False
         st.session_state.messages = []
         st.rerun()
 
-# -----------------------------------
-# WELCOME MESSAGE
-# -----------------------------------
+client = st.session_state.client
 
-if len(st.session_state.messages) == 0:
+# -----------------------------
+# WEB SEARCH
+# -----------------------------
 
-    welcome = """
-### 🤖 You are welcome in Mr. Wael Hlal Chatbot  
+def web_search(query):
+
+    results = ""
+
+    with DDGS() as ddgs:
+
+        data = list(ddgs.text(query, max_results=5))
+
+    for r in data:
+
+        results += f"{r['title']} - {r['body']}\n"
+
+    return results
+
+# -----------------------------
+# PDF READER
+# -----------------------------
+
+def read_pdf(file):
+
+    reader = PdfReader(file)
+
+    text = ""
+
+    for page in reader.pages:
+
+        text += page.extract_text()
+
+    return text
+
+# -----------------------------
+# CHAT PAGE
+# -----------------------------
+
+if st.session_state.page == "Chat":
+
+    st.title("💬 HLAL AI Chatbot")
+
+    # Welcome Message
+    if len(st.session_state.messages) == 0:
+
+        welcome = """
+### 🤖 You are welcome in Mr. Wael Hlal AI Chatbot  
 How can I assist you today?
 
 ---
 
-### 🤖 اهلا وسهلا بك في روبوت السيد وائل هلال للذكاء الاصطناعي  
+### 🤖 اهلا وسهلا بك في روبوت وائل هلال للذكاء الاصطناعي  
 كيف يمكنني مساعدتك اليوم؟
 """
 
-    st.session_state.messages.append(
-        {"role": "assistant", "content": welcome}
-    )
-
-# -----------------------------------
-# CHAT PAGE
-# -----------------------------------
-
-if st.session_state.page == "Chat":
-
-    st.title("HLAL AI Chatbot")
-
-    if st.button("🗑 Clear Chat"):
-        st.session_state.messages = []
+        st.session_state.messages.append(
+            {"role": "assistant", "content": welcome}
+        )
 
     for msg in st.session_state.messages:
 
         avatar = "🤖" if msg["role"] == "assistant" else "👤"
 
         with st.chat_message(msg["role"], avatar=avatar):
+
             st.markdown(msg["content"])
 
-    # -----------------------------------
-    # FILE UPLOAD (WAIT BEFORE SEND)
-    # -----------------------------------
-
     uploaded_files = st.file_uploader(
-        "📎 Attach file",
-        type=["png", "jpg", "jpeg", "pdf", "docx", "xlsx", "csv"],
+        "Attach files",
         accept_multiple_files=True,
-        label_visibility="collapsed"
+        type=["pdf","docx","csv","xlsx","png","jpg","jpeg"]
     )
 
     if uploaded_files:
+
         for f in uploaded_files:
-            st.session_state.pending_files.append(f)
 
-    # -----------------------------------
-    # FILE PREVIEW
-    # -----------------------------------
+            if f not in st.session_state.pending_files:
 
-    if st.session_state.pending_files:
+                st.session_state.pending_files.append(f)
 
-        st.markdown("### 📎 Attached files")
+    user_input = st.chat_input("Ask anything...")
 
-        for i, file in enumerate(st.session_state.pending_files):
+    if user_input:
 
-            col1, col2 = st.columns([8,1])
+        content = user_input
 
-            with col1:
+        if "search" in user_input.lower() or "بحث" in user_input:
 
-                if file.type.startswith("image"):
-                    st.image(file, width=200)
+            results = web_search(user_input)
 
-                else:
-                    st.write("📄", file.name)
-
-            with col2:
-
-                if st.button("❌", key=f"remove_{i}"):
-
-                    st.session_state.pending_files.pop(i)
-                    st.rerun()
-
-    # -----------------------------------
-    # MESSAGE INPUT
-    # -----------------------------------
-
-    col1, col2 = st.columns([9,1])
-
-    with col1:
-        user_input = st.text_input("Type your message")
-
-    with col2:
-        send = st.button("➤")
-
-    if send or user_input:
-
-        content = []
-
-        if user_input:
-            content.append({"type":"input_text","text":user_input})
+            content += f"\n\nWeb Results:\n{results}"
 
         for file in st.session_state.pending_files:
 
-            if file.type.startswith("image"):
+            if file.type == "application/pdf":
 
-                img = file.read()
-                base64_img = base64.b64encode(img).decode()
+                text = read_pdf(file)
 
-                content.append({
-                    "type":"input_image",
-                    "image_url":f"data:image/jpeg;base64,{base64_img}"
-                })
+                content += f"\n\nPDF Content:\n{text[:12000]}"
 
-            elif file.type == "application/pdf":
+            elif "word" in file.type:
 
-                reader = PdfReader(file)
-                text=""
+                doc = Document(file)
 
-                for p in reader.pages:
-                    text += p.extract_text()
+                text = "\n".join([p.text for p in doc.paragraphs])
 
-                content.append({"type":"input_text","text":text})
+                content += f"\n\nDOCX:\n{text}"
 
-        response = client.responses.create(
-            model="gpt-5.2",
-            input=[{"role":"user","content":content}]
-        )
+            elif file.type == "text/csv":
 
-        reply = response.output_text
+                df = pd.read_csv(file)
 
-        st.session_state.messages.append(
-            {"role":"user","content":user_input if user_input else "📎 File sent"}
-        )
+                content += f"\n\nCSV:\n{df}"
+
+            elif "excel" in file.type:
+
+                df = pd.read_excel(file)
+
+                content += f"\n\nExcel:\n{df}"
 
         st.session_state.messages.append(
-            {"role":"assistant","content":reply}
+            {"role": "user", "content": user_input}
+        )
+
+        response_text = ""
+
+        with st.chat_message("assistant"):
+
+            placeholder = st.empty()
+
+            with client.responses.stream(
+                model="gpt-5.2",
+                input=st.session_state.messages
+            ) as stream:
+
+                for event in stream:
+
+                    if event.type == "response.output_text.delta":
+
+                        response_text += event.delta
+
+                        placeholder.markdown(response_text)
+
+        st.session_state.messages.append(
+            {"role": "assistant", "content": response_text}
         )
 
         st.session_state.pending_files = []
 
         st.rerun()
 
-# -----------------------------------
-# CAMERA PAGE
-# -----------------------------------
+# -----------------------------
+# CAMERA VISION
+# -----------------------------
 
 if st.session_state.page == "Camera":
 
-    st.title("Camera Analysis")
+    st.title("📷 AI Camera Vision")
 
-    picture = st.camera_input("Take photo")
+    st.write("Capture an image and ask AI about it")
 
-    if picture:
+    image = st.camera_input("Take a photo")
 
-        img = picture.read()
+    question = st.text_input("Ask about the image")
 
-        st.image(img)
+    if image:
 
-        base64_img = base64.b64encode(img).decode()
+        st.image(image, use_container_width=True)
+
+        if question:
+
+            image_bytes = image.getvalue()
+
+            base64_img = base64.b64encode(image_bytes).decode()
+
+            with st.spinner("Analyzing image..."):
+
+                response = client.responses.create(
+                    model="gpt-5.2",
+                    input=[{
+                        "role":"user",
+                        "content":[
+                            {"type":"input_text","text":question},
+                            {
+                                "type":"input_image",
+                                "image_url":f"data:image/jpeg;base64,{base64_img}"
+                            }
+                        ]
+                    }]
+                )
+
+            st.write(response.output_text)
+
+# -----------------------------
+# VOICE CHAT
+# -----------------------------
+
+if st.session_state.page == "Voice":
+
+    st.title("🎤 Voice Assistant")
+
+    audio = st.audio_input("Speak")
+
+    if audio:
+
+        transcript = client.audio.transcriptions.create(
+            model="gpt-4o-transcribe",
+            file=audio
+        )
+
+        user_text = transcript.text
+
+        st.write("You:", user_text)
 
         response = client.responses.create(
             model="gpt-5.2",
-            input=[{
-                "role":"user",
-                "content":[
-                    {"type":"input_text","text":"Analyze this image"},
-                    {"type":"input_image","image_url":f"data:image/jpeg;base64,{base64_img}"}
-                ]
-            }]
+            input=user_text
         )
 
-        st.write(response.output_text)
+        reply = response.output_text
 
-# -----------------------------------
+        st.write("AI:", reply)
+
+# -----------------------------
 # IMAGE GENERATION
-# -----------------------------------
+# -----------------------------
 
 if st.session_state.page == "Image":
 
-    st.title("Image Generation")
+    st.title("🎨 Image Generator")
 
-    prompt = st.text_input("Image prompt")
+    prompt = st.text_input("Describe image")
 
     if st.button("Generate"):
 
@@ -330,106 +386,28 @@ if st.session_state.page == "Image":
 
         st.image(img)
 
-# -----------------------------------
-# VOICE CHAT
-# -----------------------------------
-
-if st.session_state.page == "Voice":
-
-    st.title("Voice Chat")
-
-    audio_queue = queue.Queue()
-
-    def audio_callback(frame):
-
-        audio = frame.to_ndarray()
-        audio_queue.put(audio)
-
-        return frame
-
-    webrtc_streamer(
-        key="voice",
-        audio_frame_callback=audio_callback,
-        media_stream_constraints={"audio":True,"video":False}
-    )
-
-    if st.button("Process Voice"):
-
-        audio_data=[]
-
-        while not audio_queue.empty():
-            audio_data.append(audio_queue.get())
-
-        if len(audio_data)==0:
-
-            st.warning("No audio recorded")
-
-        else:
-
-            audio_np=np.concatenate(audio_data)
-
-            temp_audio=tempfile.NamedTemporaryFile(delete=False,suffix=".wav")
-
-            sf.write(temp_audio.name,audio_np,44100)
-
-            with open(temp_audio.name,"rb") as f:
-
-                transcript=client.audio.transcriptions.create(
-                    model="gpt-4o-transcribe",
-                    file=f
-                )
-
-            text=transcript.text
-
-            st.write("📝",text)
-
-            response=client.responses.create(
-                model="gpt-5.2",
-                input=text
-            )
-
-            st.write("🤖",response.output_text)
-
-# -----------------------------------
+# -----------------------------
 # TEXT TO SPEECH
-# -----------------------------------
+# -----------------------------
 
 if st.session_state.page == "TTS":
 
-    st.title("Text to Speech")
+    st.title("🔊 Text To Speech")
 
     text = st.text_area("Enter text")
 
     if st.button("Generate Voice"):
 
-        tts = gTTS(text)
+        speech_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
 
-        tmp = tempfile.NamedTemporaryFile(delete=False)
+        speech = client.audio.speech.create(
+            model="gpt-4o-mini-tts",
+            voice="alloy",
+            input=text
+        )
 
-        tts.save(tmp.name)
+        speech.stream_to_file(speech_file.name)
 
-        audio = open(tmp.name,"rb")
+        audio = open(speech_file.name, "rb")
 
         st.audio(audio.read())
-
-# -----------------------------------
-# WEB SEARCH
-# -----------------------------------
-
-if st.session_state.page == "Search":
-
-    st.title("Web Search")
-
-    query = st.text_input("Search")
-
-    if st.button("Search"):
-
-        with DDGS() as ddgs:
-
-            results=list(ddgs.text(query,max_results=5))
-
-        for r in results:
-
-            st.write("###",r["title"])
-            st.write(r["body"])
-            st.write(r["href"])

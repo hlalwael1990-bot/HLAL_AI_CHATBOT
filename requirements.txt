@@ -4,10 +4,10 @@ python-dotenv
 pandas
 pillow
 pypdf
-python-docx
 openpyxl
 gtts
 streamlit-webrtc
 duckduckgo-search
 soundfile
 numpy
+python-docx
