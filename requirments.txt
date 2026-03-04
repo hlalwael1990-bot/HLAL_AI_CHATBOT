@@ -11,4 +11,3 @@ streamlit-webrtc
 duckduckgo-search
 soundfile
 numpy
-docx
