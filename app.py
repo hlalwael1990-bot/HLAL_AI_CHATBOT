@@ -1,15 +1,15 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import os
 import base64
 import tempfile
 import pandas as pd
 import hmac
-
-from dotenv import load_dotenv
 from openai import OpenAI
 from pypdf import PdfReader
 from docx import Document
 from duckduckgo_search import DDGS
+from dotenv import load_dotenv
 
 
 # =====================================
@@ -41,7 +41,7 @@ PASSWORD = os.getenv("APP_PASSWORD")
 # =====================================
 
 st.set_page_config(
-    page_title="HLAL AI",
+    page_title="Professional Chatbot",
     page_icon="🤖",
     layout="wide"
 )
@@ -76,43 +76,13 @@ if "mode" not in st.session_state:
 
 with st.sidebar:
 
-    st.title("🤖 HLAL AI")
+    st.title("🤖 AI Chatbot")
 
     if not st.session_state.auth:
+        st.session_state.client = OpenAI(api_key=API_KEY)
+        st.session_state.auth = True
 
-        method = st.radio(
-            "Login Method",
-            ["Password", "API Key"]
-        )
-
-        pw = st.text_input("Password / API Key", type="password")
-
-        if st.button("Login"):
-
-            if method == "Password":
-
-                if hmac.compare_digest(pw, PASSWORD):
-
-                    st.session_state.client = OpenAI(api_key=API_KEY)
-                    st.session_state.auth = True
-                    st.rerun()
-
-                else:
-                    st.error("Wrong password")
-
-            else:
-
-                if pw.startswith("sk-"):
-
-                    st.session_state.client = OpenAI(api_key=pw)
-                    st.session_state.auth = True
-                    st.rerun()
-
-                else:
-                    st.error("Invalid API key")
-
-        st.stop()
-
+    
     st.divider()
 
     if st.button("💬 Chat"):
@@ -138,7 +108,31 @@ with st.sidebar:
     if st.button("🚪 Logout"):
         st.session_state.auth = False
         st.session_state.messages = []
-        st.rerun()
+
+        st.warning("You have been logged out.")
+
+        components.html("""
+        <script>
+            // Try to close the window after a short delay so the message is visible.
+            function tryClose() {
+                window.open('', '_self');
+                window.close();
+                setTimeout(() => {
+                    window.location.href = 'about:blank';
+                }, 300);
+            }
+
+            setTimeout(tryClose, 3000);
+        </script>
+
+        <div style="font-family: Arial, sans-serif; padding: 16px; text-align: center;">
+            <h2>You have been logged out</h2>
+            <p>If this tab did not close automatically, please click the button below.</p>
+            <button onclick="tryClose()" style="padding: 12px 24px; font-size: 16px;">Close this tab</button>
+        </div>
+        """)
+
+        st.stop()
 
     st.divider()
 
@@ -273,7 +267,7 @@ system_prompts = {
 
 if st.session_state.page == "Chat":
 
-    st.title("💬 HLAL AI Chatbot")
+    st.title("💬 Professional Chatbot")
 
     for msg in st.session_state.messages:
 
@@ -326,7 +320,7 @@ if st.session_state.page == "Chat":
                      "content":system_prompts[st.session_state.mode]}
                 ]
 
-                # تحسين 4
+                
                 for m in st.session_state.messages[-10:]:
                     messages.append(m)
 
